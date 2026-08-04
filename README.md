@@ -6,11 +6,11 @@
 ![Python](https://img.shields.io/badge/python-3.10--3.12-blue.svg)
 ![PyPI](https://img.shields.io/badge/PyPI-coming_soon-lightgrey.svg)
 
-[Technical Report](https://www.valencelabs.com/wp-content/uploads/2026/07/nesso1.pdf) &bull; [Model Weights](https://huggingface.co/recursionpharma/nesso) &bull; [License](LICENSE)
+[Technical Report](https://www.biorxiv.org/content/10.64898/2026.08.01.742196v1) &bull; [Model Weights](https://huggingface.co/recursionpharma/nesso) &bull; [License](LICENSE)
 
 </div>
 
-This repository contains the code for Nesso-1, a coarse-grained cofolding model that can predict binding affinity. For more details about the method and evaluations, refer to this [Technical Report](https://www.valencelabs.com/wp-content/uploads/2026/07/nesso1.pdf). This project is licensed under a permissive [Apache License 2.0](LICENSE).
+This repository contains the code for Nesso-1, a coarse-grained cofolding model that can predict binding affinity. For more details about the method and evaluations, refer to this [Technical Report](https://www.biorxiv.org/content/10.64898/2026.08.01.742196v1). This project is licensed under a permissive [Apache License 2.0](LICENSE).
 
 ## Contents
 
@@ -90,10 +90,13 @@ Note: For input formats, caching, and all CLI options, see [docs/prediction.md](
 ## Citation
 
 ```bibtex
-@article{valencelabs2026nesso1,
-  author = {Valence Labs, Recursion, Nikhil Shenoy, David Errington, Emmanuel Bengio, Kacper Kapu\'sniak, Kerstin Klaeser, Yui Tik Pang, Vladimir Radenkovic, Prudencio Tossou, Therence Bois, Andrew Wedlake, Francesco Di Giovanni},
+@article{shenoy2026nesso1,
+  author = {Shenoy, Nikhil and Errington, David and Bengio, Emmanuel and Kapu\'sniak, Kacper and Klaeser, Kerstin and Pang, Yui Tik and Radenkovic, Vladimir and Tossou, Prudencio and Bois, Therence and Wedlake, Andrew and Di Giovanni, Francesco},
   title = {Nesso-1: Accelerating Open-Source Binding Affinity Predictions},
-  year = {2026}
+  year = {2026},
+  url = {https://www.biorxiv.org/content/10.64898/2026.08.01.742196v1},
+  doi = {10.64898/2026.08.01.742196},
+  journal = {bioRxiv}
 }
 ```
 
