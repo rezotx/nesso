@@ -9,8 +9,8 @@ captures the operational details and gotchas that aren't obvious from reading th
 
 ## Environment
 
-- **Python `>=3.10,<3.13` is a hard constraint** (see `pyproject.toml`). The package
-  will not install on 3.13+. This is the most common silent setup failure — check the
+- **Python `>=3.10,<3.14` is a hard constraint** (see `pyproject.toml`). The package
+  will not install on 3.14+. This is the most common silent setup failure — check the
   interpreter version first when an install or import misbehaves.
 - Install for development from a clone:
   ```bash
