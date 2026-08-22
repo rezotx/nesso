@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nesso"
 version = "1.0.0"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.14"
 description = "Nesso-1: Accelerating Open-Source Binding Affinity Predictions"
 readme = "README.md"
 license = { text = "Apache-2.0" }

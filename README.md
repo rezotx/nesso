@@ -3,7 +3,7 @@
 <img src="assets/imgs/logo.png" alt="Nesso-1: Accelerating Open-Source Binding Affinity Predictions" width="600" />
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Python](https://img.shields.io/badge/python-3.10--3.12-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)
 ![PyPI](https://img.shields.io/badge/PyPI-coming_soon-lightgrey.svg)
 [![bio.rodeo usability score](https://img.shields.io/endpoint?url=https://bio.rodeo/api/badge/openness-usability/nesso-1)](https://bio.rodeo/models/nesso-1)
 
