@@ -5,6 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10--3.12-blue.svg)
 ![PyPI](https://img.shields.io/badge/PyPI-coming_soon-lightgrey.svg)
+[![bio.rodeo usability score](https://img.shields.io/endpoint?url=https://bio.rodeo/api/badge/openness-usability/nesso-1)](https://bio.rodeo/models/nesso-1)
 
 [Technical Report](https://www.biorxiv.org/content/10.64898/2026.08.01.742196v1) &bull; [Model Weights](https://huggingface.co/recursionpharma/nesso) &bull; [License](LICENSE)
 
