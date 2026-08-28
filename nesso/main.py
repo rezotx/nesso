@@ -8,30 +8,32 @@ import hashlib
 import os
 import sys
 import warnings
-from importlib.metadata import PackageNotFoundError, version as pkg_version
+from collections.abc import Callable, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Any
 
 import click
-import torch
 import lightning.pytorch as pl
+import torch
 import yaml as pyyaml
 from lightning.pytorch import Trainer
 from safetensors.torch import save_file
 from tqdm import tqdm
-
-from nesso.data.inference import NessoInferenceDataModule
-from nesso.data.types import Manifest, Record
-from nesso.data.writer import NessoWriter
-from nesso.data.yaml_input import parse_yaml, validate_schema
-from nesso.model.models.nesso1 import Nesso1
 
 from nesso.data.esm import (
     DEFAULT_ESM2_MODEL,
     extract_esm_embedding,
     setup_esm_model,
 )
+from nesso.data.inference import NessoInferenceDataModule
+from nesso.data.types import Manifest, Record
+from nesso.data.writer import NessoCallbackWriter, NessoWriter
+from nesso.data.yaml_input import parse_yaml, validate_schema
+from nesso.model.models.nesso1 import Nesso1
 
 # Default source for the model weights, config, and CCD dictionary on the
 # HuggingFace Hub. Custom weights can be passed with the --checkpoint option.
@@ -297,6 +299,142 @@ def filter_records(
     ]
 
 
+@dataclass
+class NessoPredictionResult:
+    """Counts produced by one prediction pass."""
+
+    failed_preprocessing: list[str]
+    prediction_failures: int
+    records_to_predict: int
+
+
+@dataclass
+class NessoPredictionRunner:
+    """Run preprocessing, embeddings, and streaming Nesso prediction."""
+
+    yaml_paths: list[Path]
+    output_dir: Path
+    checkpoint_path: Path
+    ccd_path: Path
+    esm_model: str = DEFAULT_ESM2_MODEL
+    esm_cache: Path | None = None
+    preprocessing_workers: int = 2
+    dataloader_workers: int = 2
+    accelerator: str = "gpu"
+    devices: int = 1
+    precision: str = "bf16-mixed"
+    recycling_steps: int = 5
+    affinity_protein_cutoff: float = 15.0
+    refine_protein_inference: bool = True
+    refine_protein_cutoff: float = 22.0
+    refine_protein_tokens_budget: int = 256
+    no_kernels: bool = False
+    require_affinity: bool = False
+    save_metadata: bool = False
+    seed: int = 42
+    override: bool = False
+    enable_progress_bar: bool = True
+    batch_callback: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None
+
+    def run(self) -> NessoPredictionResult:
+        """Stream predictions to the configured writer or batch callback."""
+        pl.seed_everything(self.seed, workers=True)
+        torch.set_float32_matmul_precision("highest")
+        paths = resolve_paths(self.output_dir)
+        manifest, failed = preprocess_yamls(
+            self.yaml_paths,
+            paths.mol_dir,
+            self.ccd_path,
+            paths.structures_dir,
+            paths.records_dir,
+            num_workers=self.preprocessing_workers,
+        )
+        manifest.dump(paths.manifest_path)
+        if not manifest.records:
+            return NessoPredictionResult(failed, 0, 0)
+
+        self._prepare_embeddings(paths)
+        records = filter_records(
+            manifest.records,
+            paths.predictions_dir,
+            override=self.override,
+        )
+        if not records:
+            return NessoPredictionResult(failed, 0, 0)
+
+        model = self._load_model()
+        datamodule = NessoInferenceDataModule(
+            manifest=replace(manifest, records=records),
+            target_dir=paths.processed,
+            esm_emb_dir=paths.esm_dir,
+            ligand_dir=paths.mol_dir,
+            ccd_pkl=self.ccd_path,
+            num_workers=self.dataloader_workers,
+            use_esm_all_layers=False,
+            esm_emb_dim=1280,
+            esm_num_layers=33,
+        )
+        writer = (
+            NessoCallbackWriter(self.batch_callback)
+            if self.batch_callback is not None
+            else NessoWriter(paths.predictions_dir, self.save_metadata)
+        )
+        precision = (
+            "32"
+            if self.accelerator == "cpu" and self.precision == "bf16-mixed"
+            else self.precision
+        )
+        trainer = Trainer(
+            accelerator=self.accelerator,
+            devices=self.devices,
+            precision=precision,
+            logger=False,
+            enable_checkpointing=False,
+            enable_progress_bar=self.enable_progress_bar,
+            callbacks=[writer],
+        )
+        trainer.predict(model, datamodule=datamodule, return_predictions=False)
+        return NessoPredictionResult(
+            failed,
+            getattr(writer, "failed", 0),
+            len(records),
+        )
+
+    def _prepare_embeddings(self, paths: Paths) -> None:
+        """Reuse provided embeddings and generate any missing ESM tensors."""
+        sequences, esm_paths = collect_esm_from_yamls(self.yaml_paths)
+        paths.esm_dir.mkdir(parents=True, exist_ok=True)
+        for msa_id, source in esm_paths.items():
+            destination = paths.esm_dir / f"{msa_id}.safetensors"
+            if not destination.exists() and Path(source).exists():
+                destination.symlink_to(Path(source).resolve())
+        run_esm(sequences, paths.esm_dir, self.esm_model, self.esm_cache)
+
+    def _load_model(self) -> Nesso1:
+        """Load and configure the model for prediction."""
+        model = Nesso1.from_pretrained(self.checkpoint_path)
+        if self.require_affinity and not model.affinity_prediction:
+            raise ValueError("checkpoint lacks affinity head")
+        if self.no_kernels:
+            model.use_kernels = False
+        if model.predict_args is None:
+            model.predict_args = {}
+        model.predict_args.update(
+            {
+                "pose_protein_cutoff": 15.0,
+                "recycling_steps": self.recycling_steps,
+                "affinity_protein_cutoff": self.affinity_protein_cutoff,
+                "refine_protein_inference": self.refine_protein_inference,
+                "refine_protein_cutoff": self.refine_protein_cutoff,
+                "refine_protein_tokens_budget": self.refine_protein_tokens_budget,
+                "save_metadata": self.save_metadata,
+            }
+        )
+        model.eval()
+        torch.set_grad_enabled(False)
+        return model
+
+
 def check_inputs(data: Path) -> list[Path]:
     """Check the input data and return list of YAML files."""
     if data.is_dir():
@@ -317,7 +455,6 @@ def check_inputs(data: Path) -> list[Path]:
 @click.group()
 def cli() -> None:
     """Nesso: fast binding affinity prediction from protein sequence and ligand SMILES."""
-    pass
 
 
 @cli.command()
@@ -464,8 +601,6 @@ def predict(
     seed: int,
 ) -> None:
     """Run predictions using Nesso."""
-    pl.seed_everything(seed, workers=True)
-
     for _, val, default, msg in [
         (
             "refine_protein_inference",
@@ -492,8 +627,6 @@ def predict(
     warnings.filterwarnings(
         "ignore", ".*that has Tensor Cores. To properly utilize them.*"
     )
-    torch.set_float32_matmul_precision("highest")
-
     cache = get_cache_path() if cache is None else cache.expanduser().resolve()
 
     # Avoid overriding user-configured HuggingFace cache locations.
@@ -511,9 +644,7 @@ def predict(
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    paths = resolve_paths(out_dir)
-
-    # Validate input schemas up front (per-record)
+    # Validate input schemas up front (per-record).
     valid_yaml_paths: list[Path] = []
     invalid_schemas: list[str] = []
     for yp in yaml_paths:
@@ -538,125 +669,60 @@ def predict(
         )
         sys.exit(1)
 
-    # 2. Preprocess YAMLs to Manifest
     click.echo("Preprocessing inputs...")
-    manifest, failed_preprocessing = preprocess_yamls(
-        valid_yaml_paths,
-        paths.mol_dir,
-        ccd_pkl,
-        paths.structures_dir,
-        paths.records_dir,
-        num_workers=num_workers,
-    )
-    manifest.dump(paths.manifest_path)
-    if failed_preprocessing:
-        click.echo(
-            f"Failed to preprocess {len(failed_preprocessing)} of "
-            f"{len(valid_yaml_paths)} input(s): {', '.join(sorted(failed_preprocessing))}",
-            err=True,
-        )
-    if not manifest.records:
-        click.echo(
-            "Error: no inputs could be preprocessed; nothing to predict.", err=True
-        )
+    try:
+        result = NessoPredictionRunner(
+            yaml_paths=valid_yaml_paths,
+            output_dir=out_dir,
+            checkpoint_path=checkpoint_path,
+            ccd_path=ccd_pkl,
+            esm_cache=cache / "huggingface",
+            preprocessing_workers=num_workers,
+            dataloader_workers=num_workers,
+            accelerator=accelerator,
+            devices=devices,
+            precision=precision,
+            recycling_steps=recycling_steps,
+            affinity_protein_cutoff=affinity_protein_cutoff,
+            refine_protein_inference=refine_protein_inference,
+            refine_protein_cutoff=refine_protein_cutoff,
+            refine_protein_tokens_budget=refine_protein_tokens_budget,
+            no_kernels=no_kernels,
+            require_affinity=require_affinity,
+            save_metadata=save_metadata,
+            seed=seed,
+            override=override,
+        ).run()
+    except Exception as exc:
+        click.echo(f"Error running prediction: {exc}", err=True)
         sys.exit(1)
 
-    # 3. Run ESM embedding generation
-    click.echo("Generating ESM embeddings...")
-    seq_by_msa, esm_paths_by_msa = collect_esm_from_yamls(yaml_paths)
-    paths.esm_dir.mkdir(parents=True, exist_ok=True)
-    for msa_id, src in esm_paths_by_msa.items():
-        dst = paths.esm_dir / f"{msa_id}.safetensors"
-        if not dst.exists() and Path(src).exists():
-            try:
-                os.symlink(Path(src).resolve(), dst)
-            except Exception:
-                pass
-    run_esm(seq_by_msa, paths.esm_dir, DEFAULT_ESM2_MODEL, cache / "huggingface")
-
-    # 4. Filter records
-    records = filter_records(manifest.records, paths.predictions_dir, override=override)
-    if not records:
+    if result.failed_preprocessing:
         click.echo(
-            f"Nothing to predict (all outputs already exist in {paths.predictions_dir}). Use --override to re-run."
+            f"Failed to preprocess {len(result.failed_preprocessing)} of "
+            f"{len(valid_yaml_paths)} input(s): "
+            f"{', '.join(sorted(result.failed_preprocessing))}",
+            err=True,
+        )
+    if result.records_to_predict == 0 and not result.failed_preprocessing:
+        click.echo(
+            f"Nothing to predict (all outputs already exist in "
+            f"{out_dir / 'predictions'}). Use --override to re-run."
         )
         return
+    click.echo(f"Done! Predictions saved to {out_dir / 'predictions'}")
 
-    # 5. Load model
-    click.echo(f"Loading model weights from {checkpoint_path}...")
-    try:
-        model_module = Nesso1.from_pretrained(checkpoint_path)
-    except Exception as e:
-        click.echo(f"Error loading checkpoint: {e}", err=True)
-        sys.exit(1)
-
-    if require_affinity and not model_module.affinity_prediction:
-        click.echo(
-            "Error: Checkpoint lacks affinity head (affinity_prediction=False).",
-            err=True,
-        )
-        sys.exit(1)
-
-    # 6. Apply no_kernels if requested
-    if no_kernels:
-        model_module.use_kernels = False
-
-    model_module.predict_args.update(
-        {
-            "pose_protein_cutoff": 15.0,
-            "recycling_steps": recycling_steps,
-            "affinity_protein_cutoff": affinity_protein_cutoff,
-            "refine_protein_inference": refine_protein_inference,
-            "refine_protein_cutoff": refine_protein_cutoff,
-            "refine_protein_tokens_budget": refine_protein_tokens_budget,
-            "save_metadata": save_metadata,
-        }
+    total_failed = (
+        len(invalid_schemas)
+        + len(result.failed_preprocessing)
+        + result.prediction_failures
     )
-    model_module.eval()
-
-    # 7. Setup DataModule & Trainer
-    precision_to_use = (
-        "32" if accelerator == "cpu" and precision == "bf16-mixed" else precision
-    )
-    torch.set_grad_enabled(False)
-
-    datamodule = NessoInferenceDataModule(
-        manifest=replace(manifest, records=records),
-        target_dir=paths.processed,
-        esm_emb_dir=paths.esm_dir,
-        ligand_dir=paths.mol_dir,
-        ccd_pkl=ccd_pkl,
-        num_workers=num_workers,
-        use_esm_all_layers=False,
-        esm_emb_dim=1280,
-        esm_num_layers=33,
-    )
-
-    writer = NessoWriter(
-        output_dir=paths.predictions_dir,
-        save_metadata=save_metadata,
-    )
-
-    trainer = Trainer(
-        accelerator=accelerator,
-        devices=devices,
-        precision=precision_to_use,
-        logger=False,
-        enable_checkpointing=False,
-        enable_progress_bar=True,
-        callbacks=[writer],
-    )
-
-    click.echo("Running predictions...")
-    trainer.predict(model_module, datamodule=datamodule, return_predictions=False)
-    click.echo(f"Done! Predictions saved to {paths.predictions_dir}")
-
-    total_failed = len(invalid_schemas) + len(failed_preprocessing) + writer.failed
     if total_failed:
         click.echo(
             f"Failed examples: {total_failed} "
             f"({len(invalid_schemas)} invalid schema, "
-            f"{len(failed_preprocessing)} preprocessing, {writer.failed} prediction).",
+            f"{len(result.failed_preprocessing)} preprocessing, "
+            f"{result.prediction_failures} prediction).",
             err=True,
         )
 

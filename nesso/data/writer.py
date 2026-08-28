@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +7,30 @@ import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter
 from safetensors.torch import save_file
+
+
+class NessoCallbackWriter(BasePredictionWriter):
+    """Stream each prediction and its input batch to a caller callback."""
+
+    def __init__(
+        self,
+        callback: Callable[[Mapping[str, Any], Mapping[str, Any]], None],
+    ) -> None:
+        super().__init__(write_interval="batch")
+        self.callback = callback
+
+    def write_on_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        prediction: Mapping[str, Any],
+        batch_indices: list[int],
+        batch: Mapping[str, Any],
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        """Pass one completed batch to the callback without retaining it."""
+        self.callback(prediction, batch)
 
 
 class NessoWriter(BasePredictionWriter):
@@ -35,13 +60,13 @@ class NessoWriter(BasePredictionWriter):
 
     def write_on_batch_end(
         self,
-        trainer: Trainer,  # noqa: ARG002
-        pl_module: LightningModule,  # noqa: ARG002
+        trainer: Trainer,
+        pl_module: LightningModule,
         prediction: dict[str, Any],
-        batch_indices: list[int],  # noqa: ARG002
-        batch: Any,  # noqa: ARG002
-        batch_idx: int,  # noqa: ARG002
-        dataloader_idx: int,  # noqa: ARG002
+        batch_indices: list[int],
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int,
     ) -> None:
         exc = prediction.get("exception")
         if exc is True or (
@@ -61,9 +86,7 @@ class NessoWriter(BasePredictionWriter):
         # Extract only affinity and entropy scalars
         stats: dict[str, float] = {}
         for k, v in prediction.items():
-            if (
-                k.startswith("affinity_") or k.startswith("entropy_")
-            ) and k != "entropy_pair":
+            if k.startswith(("affinity_", "entropy_")) and k != "entropy_pair":
                 if isinstance(v, torch.Tensor):
                     stats[k] = float(v.item())
                 elif isinstance(v, (int, float)):
@@ -91,7 +114,7 @@ class NessoWriter(BasePredictionWriter):
 
     def on_predict_epoch_end(
         self,
-        trainer: Trainer,  # noqa: ARG002
-        pl_module: LightningModule,  # noqa: ARG002
+        trainer: Trainer,
+        pl_module: LightningModule,
     ) -> None:
-        print(f"Number of failed examples: {self.failed}")  # noqa: T201
+        print(f"Number of failed examples: {self.failed}")
