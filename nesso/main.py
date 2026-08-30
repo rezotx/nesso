@@ -8,13 +8,11 @@ import hashlib
 import os
 import sys
 import warnings
-from collections.abc import Callable, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Any
 
 import click
 import lightning.pytorch as pl
@@ -31,7 +29,7 @@ from nesso.data.esm import (
 )
 from nesso.data.inference import NessoInferenceDataModule
 from nesso.data.types import Manifest, Record
-from nesso.data.writer import NessoCallbackWriter, NessoWriter
+from nesso.data.writer import NessoWriter
 from nesso.data.yaml_input import parse_yaml, validate_schema
 from nesso.model.models.nesso1 import Nesso1
 
@@ -334,7 +332,6 @@ class NessoPredictionRunner:
     seed: int = 42
     override: bool = False
     enable_progress_bar: bool = True
-    batch_callback: Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None = None
 
     def run(self) -> NessoPredictionResult:
         """Stream predictions to the configured writer or batch callback."""
@@ -374,11 +371,7 @@ class NessoPredictionRunner:
             esm_emb_dim=1280,
             esm_num_layers=33,
         )
-        writer = (
-            NessoCallbackWriter(self.batch_callback)
-            if self.batch_callback is not None
-            else NessoWriter(paths.predictions_dir, self.save_metadata)
-        )
+        writer = NessoWriter(paths.predictions_dir, self.save_metadata)
         precision = (
             "32"
             if self.accelerator == "cpu" and self.precision == "bf16-mixed"
@@ -396,7 +389,7 @@ class NessoPredictionRunner:
         trainer.predict(model, datamodule=datamodule, return_predictions=False)
         return NessoPredictionResult(
             failed,
-            getattr(writer, "failed", 0),
+            writer.failed,
             len(records),
         )
 

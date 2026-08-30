@@ -147,7 +147,10 @@ Contains ensemble affinity scalars, binary scores, and distogram entropies:
   "affinity_pred_value1": 1.49,
   "affinity_pred_value2": 1.01,
   "affinity_logits_binary": 0.20,
-  "affinity_probability_binary": 0.55
+  "affinity_probability_binary": 0.55,
+  "binding_site_tokens": [
+    {"asym_id": 0, "residue_index": 42}
+  ]
 }
 ```
 
@@ -160,6 +163,7 @@ Contains ensemble affinity scalars, binary scores, and distogram entropies:
 * **`affinity_probability_binary`**: Sigmoid probability from `affinity_logits_binary` (0.0 to 1.0).
 * **`entropy_pp` / `entropy_pl` / `entropy_ll`**: Entropies of the predicted distance distributions for protein-protein (pp), protein-ligand (pl), and ligand-ligand (ll) pairs.
 * **`entropy_crop_pp` / `entropy_crop_pl` / `entropy_crop_ll`**: Entropies computed on cropped distograms (if cropping is enabled).
+* **`binding_site_tokens`**: Protein residues selected around the ligand, using zero-based chain (`asym_id`) and residue (`residue_index`) indices from the supplied sequence order.
 
 > [!IMPORTANT]  
 > Since we always do cropping or refinement after the first recycling step (by passing `--refine_protein_inference`), we crop after the first recyling step to protein tokens in the vicinity of the ligand tokens. Therefore, the value of `entropy_crop_{pp/pl/ll}` is the entropy term thats calculated on the protein-ligand interface. This is the value users should be looking at to get a measure of model confidence on structural predictions. If the value of `entropy_crop_{pl}` is 0.0, then it means the model wasn't able to confidently place the ligand, the predictions in those cases should not be trusted.

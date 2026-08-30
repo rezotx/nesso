@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Mapping
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,29 +8,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter
 from safetensors.torch import save_file
 
-
-class NessoCallbackWriter(BasePredictionWriter):
-    """Stream each prediction and its input batch to a caller callback."""
-
-    def __init__(
-        self,
-        callback: Callable[[Mapping[str, Any], Mapping[str, Any]], None],
-    ) -> None:
-        super().__init__(write_interval="batch")
-        self.callback = callback
-
-    def write_on_batch_end(
-        self,
-        trainer: Trainer,
-        pl_module: LightningModule,
-        prediction: Mapping[str, Any],
-        batch_indices: list[int],
-        batch: Mapping[str, Any],
-        batch_idx: int,
-        dataloader_idx: int,
-    ) -> None:
-        """Pass one completed batch to the callback without retaining it."""
-        self.callback(prediction, batch)
+from nesso.data import const
 
 
 class NessoWriter(BasePredictionWriter):
@@ -83,17 +61,27 @@ class NessoWriter(BasePredictionWriter):
         record_dir = self.output_dir / str(rid)
         record_dir.mkdir(parents=True, exist_ok=True)
 
-        # Extract only affinity and entropy scalars
-        stats: dict[str, float] = {}
+        # Keep scalar predictions and compact residue indices in one result.
+        stats: dict[str, Any] = {}
         for k, v in prediction.items():
             if k.startswith(("affinity_", "entropy_")) and k != "entropy_pair":
                 if isinstance(v, torch.Tensor):
                     stats[k] = float(v.item())
                 elif isinstance(v, (int, float)):
                     stats[k] = float(v)
+        stats["binding_site_tokens"] = self._binding_site_tokens(
+            prediction,
+            batch,
+        )
 
         stats_path = record_dir / "affinity.json"
-        stats_path.write_text(json.dumps(stats, indent=2))
+        if stats_path.exists():
+            raise FileExistsError(f"prediction already exists: {stats_path}")
+        self._write_json_atomically(stats_path, stats)
+
+        # This directory mtime marks a completely committed result generation.
+        os.utime(self.output_dir)
+        self._fsync_directory(self.output_dir)
 
         # Save additional pairwise representations if requested
         if self.save_metadata:
@@ -118,3 +106,46 @@ class NessoWriter(BasePredictionWriter):
         pl_module: LightningModule,
     ) -> None:
         print(f"Number of failed examples: {self.failed}")
+
+    @staticmethod
+    def _binding_site_tokens(
+        prediction: dict[str, Any],
+        batch: dict[str, Any],
+    ) -> list[dict[str, int]]:
+        """Return selected protein residue indices from one prediction."""
+        selected = prediction["pocket_mask"].bool() & (
+            batch["mol_type"] == const.chain_type_ids["PROTEIN"]
+        )
+        asym_ids = batch["asym_id"][selected].detach().cpu().tolist()
+        residue_indices = batch["residue_index"][selected].detach().cpu().tolist()
+        return [
+            {
+                "asym_id": int(asym_id),
+                "residue_index": int(residue_index),
+            }
+            for asym_id, residue_index in zip(
+                asym_ids,
+                residue_indices,
+                strict=True,
+            )
+        ]
+
+    @staticmethod
+    def _write_json_atomically(path: Path, data: dict[str, Any]) -> None:
+        """Commit JSON only after its complete contents reach local storage."""
+        temporary_path = path.parent.parent.parent / (f".{path.parent.name}.json.tmp")
+        with temporary_path.open("w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        NessoWriter._fsync_directory(path.parent)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        """Persist directory entries needed for interruption-safe resume."""
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
