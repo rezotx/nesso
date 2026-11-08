@@ -323,6 +323,7 @@ class Nesso1(LightningModule):
                 )
             dict_out["affinity_pred_value1"] = dict_out["affinity_pred_value"]
             dict_out["affinity_pred_value2"] = dict_out_affinity2["affinity_pred_value"]
+            dict_out["affinity_repr2"] = dict_out_affinity2["affinity_repr"]
             dict_out["affinity_pred_value"] = (
                 dict_out["affinity_pred_value1"] + dict_out["affinity_pred_value2"]
             ) / 2.0
@@ -407,6 +408,11 @@ class Nesso1(LightningModule):
                 pred_dict["affinity_probability_binary"] = out[
                     "affinity_probability_binary"
                 ].squeeze(-1)
+                if predict_args.get("save_embeddings", False):
+                    pred_dict["embeddings"] = {
+                        "affinity_repr1": out["affinity_repr"][0],
+                        "affinity_repr2": out["affinity_repr2"][0],
+                    }
 
             if predict_args.get("save_metadata", False):
                 N = batch["token_pad_mask"].shape[1]

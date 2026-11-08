@@ -329,6 +329,7 @@ class NessoPredictionRunner:
     no_kernels: bool = False
     require_affinity: bool = False
     save_metadata: bool = False
+    save_embeddings: bool = False
     seed: int = 42
     override: bool = False
     enable_progress_bar: bool = True
@@ -421,6 +422,7 @@ class NessoPredictionRunner:
                 "refine_protein_cutoff": self.refine_protein_cutoff,
                 "refine_protein_tokens_budget": self.refine_protein_tokens_budget,
                 "save_metadata": self.save_metadata,
+                "save_embeddings": self.save_embeddings,
             }
         )
         model.eval()
@@ -538,6 +540,11 @@ def cli() -> None:
     help="Save pairwise trunk representations and metadata as predictions.safetensors.",
 )
 @click.option(
+    "--save_embeddings",
+    is_flag=True,
+    help="Save the affinity embedding of each ensemble member as embeddings.safetensors.",
+)
+@click.option(
     "--refine_protein_inference/--no_refine_protein_inference",
     default=True,
     help="Two-stage pocket cropping (nesso-pocket). Enabled by default.",
@@ -586,6 +593,7 @@ def predict(
     num_workers: int,
     require_affinity: bool,
     save_metadata: bool,
+    save_embeddings: bool,
     refine_protein_inference: bool,
     refine_protein_cutoff: float,
     refine_protein_tokens_budget: int,
@@ -683,6 +691,7 @@ def predict(
             no_kernels=no_kernels,
             require_affinity=require_affinity,
             save_metadata=save_metadata,
+            save_embeddings=save_embeddings,
             seed=seed,
             override=override,
         ).run()

@@ -35,6 +35,7 @@ nesso predict complex.yaml --out_dir /path/to/output
 | `--num_workers` | 2 | Number of dataloader workers to use |
 | `--require_affinity`| off | Exit if the checkpoint does not contain an affinity head |
 | `--save_metadata` | off | Save the pairwise trunk representations and metadata as `predictions.safetensors` |
+| `--save_embeddings` | off | Save the affinity embedding of each ensemble member as `embeddings.safetensors` |
 | `--refine_protein_inference` / `--no_refine_protein_inference` | `on` | Enable two-stage pocket cropping during inference (nesso-pocket) |
 | `--refine_protein_cutoff` | `22.0` | Cutoff distance (in Å) for selecting pocket tokens in the refined pass |
 | `--refine_protein_tokens_budget` | `256` | Max tokens when refine_protein_inference is on |
@@ -127,6 +128,7 @@ out_dir/
 └── predictions/
     └── {record_id}/
         ├── affinity.json           # Scalar predictions and metadata
+        ├── embeddings.safetensors  # Optional affinity embeddings (requires --save_embeddings)
         └── predictions.safetensors # Optional tensor outputs (requires --save_metadata)
 ```
 
@@ -175,6 +177,13 @@ Only written when `--save_metadata` is set. Contains the following tensors:
 * **`refine_mask`**: Sequence/complex tokens mask for refinement pass.
 * **`pocket_mask`**: Pocket token mask.
 * **`token_pad_mask`**: Original padding mask for tokens.
+
+#### 3. `embeddings.safetensors` *(optional)*
+Only written when `--save_embeddings` is set. Contains the float32 affinity embedding of each ensemble member, the vector that feeds both that member's affinity-value head and its binary-classification head:
+* **`affinity_repr1`**: Embedding behind `affinity_pred_value1`.
+* **`affinity_repr2`**: Embedding behind `affinity_pred_value2`.
+
+Each has shape `[token_s]` (384 for the released checkpoint). The file is committed before `affinity.json`, so a record that has `affinity.json` always has its embeddings.
 
 ---
 

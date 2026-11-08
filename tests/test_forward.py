@@ -99,3 +99,11 @@ def test_forward_smoke(tmp_path: Path, ccd_pkl_path: Path) -> None:
     out = model.forward(batch, recycling_steps=0)
     assert "pdistogram" in out
     assert "affinity_pred_value" in out
+    assert out["affinity_repr"].shape == (1, 32)
+    assert out["affinity_repr2"].shape == (1, 32)
+
+    assert "embeddings" not in model.predict_step(batch, 0)
+    predict_args["save_embeddings"] = True
+    embeddings = model.predict_step(batch, 0)["embeddings"]
+    assert set(embeddings) == {"affinity_repr1", "affinity_repr2"}
+    assert all(vector.shape == (32,) for vector in embeddings.values())

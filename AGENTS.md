@@ -46,6 +46,7 @@ Predictions are written to:
 
 ```
 {out_dir}/predictions/{record_id}/affinity.json          # always
+{out_dir}/predictions/{record_id}/embeddings.safetensors  # only with --save_embeddings
 {out_dir}/predictions/{record_id}/predictions.safetensors # only with --save_metadata
 ```
 

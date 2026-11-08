@@ -14,6 +14,7 @@ from nesso.data import const
 class NessoWriter(BasePredictionWriter):
     """Writes the predict_step output of Nesso1:
     - scalars to affinity.json,
+    - optionally the affinity embeddings to embeddings.safetensors,
     - optionally tensors to predictions.safetensors.
 
     predictions.safetensors contains the following tensors:
@@ -77,6 +78,12 @@ class NessoWriter(BasePredictionWriter):
         stats_path = record_dir / "affinity.json"
         if stats_path.exists():
             raise FileExistsError(f"prediction already exists: {stats_path}")
+        # affinity.json marks a record complete for resume, so commit the
+        # embeddings first; a restart must never skip a record without them.
+        embeddings = prediction.get("embeddings")
+        if embeddings:
+            tensors = {n: t.detach().float().cpu() for n, t in embeddings.items()}
+            save_file(tensors, record_dir / "embeddings.safetensors")
         self._write_json_atomically(stats_path, stats)
 
         # This directory mtime marks a completely committed result generation.
